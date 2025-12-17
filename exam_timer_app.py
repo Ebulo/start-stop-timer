@@ -24,7 +24,7 @@ AUDIO_MOVE = "move-to-next-station.mp3"
 
 # ---------------- CONFIG ----------------
 STATION_TIME = 4 * 60      # 4 minutes
-BREAK_TIME = 15            # 15 seconds
+BREAK_TIME = 10            # 10 seconds
 START_DELAY = 5            # gap between instructions and Start
 COUNTDOWN_NUMBERS = (3, 2, 1)
 
@@ -137,7 +137,30 @@ class ExamTimerApp:
 
         try:
             if IS_WINDOWS:
-                winsound.PlaySound(str(clip), winsound.SND_FILENAME)
+                if clip.suffix.lower() == ".wav":
+                    winsound.PlaySound(str(clip), winsound.SND_FILENAME)
+                else:
+                    command = (
+                        "& { "
+                        "$p = $args[0]; "
+                        "$player = New-Object -ComObject WMPlayer.OCX.7; "
+                        "$player.URL = $p; "
+                        "$player.controls.play(); "
+                        "while ($player.playState -ne 3 -and $player.playState -ne 8 -and $player.playState -ne 1) { "
+                        "Start-Sleep -Milliseconds 50 "
+                        "} "
+                        "while ($player.playState -ne 1 -and $player.playState -ne 8) { "
+                        "Start-Sleep -Milliseconds 100 "
+                        "} "
+                        "$player.close() "
+                        "}"
+                    )
+                    subprocess.run(
+                        ["powershell", "-NoProfile", "-STA", "-Command", command, str(clip)],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
             elif IS_MAC:
                 subprocess.run(["afplay", str(clip)], check=True)
             else:
@@ -150,6 +173,11 @@ class ExamTimerApp:
             return False
 
         return self.running
+
+    def sleep_remaining_tick(self, tick_started_at, tick_seconds=1.0):
+        remaining = tick_seconds - (time.monotonic() - tick_started_at)
+        if remaining > 0:
+            time.sleep(remaining)
 
     # ---------- SPEECH ----------
     def speak(self, text):
@@ -208,9 +236,10 @@ class ExamTimerApp:
         for remaining in range(seconds, 0, -1):
             if not self.running:
                 return False
+            tick_started_at = time.monotonic()
             self.set_status(f"{status_prefix} {remaining}s")
             self.update_timer(remaining)
-            time.sleep(1)
+            self.sleep_remaining_tick(tick_started_at)
         return self.running
 
     def countdown_to_start(self):
@@ -220,13 +249,11 @@ class ExamTimerApp:
         for remaining in range(START_DELAY, 0, -1):
             if not self.running:
                 return False
+            tick_started_at = time.monotonic()
             self.set_status(f"Status: Starting in {remaining}s")
             self.update_timer(remaining)
-
-            if remaining in COUNTDOWN_NUMBERS:
-                self.speak(str(remaining))
-
-            time.sleep(1)
+            self.speak(str(remaining))  # female voice selected at init
+            self.sleep_remaining_tick(tick_started_at)
 
         played = self.play_audio(AUDIO_START, "start")
         if not played and self.running:
@@ -237,9 +264,19 @@ class ExamTimerApp:
         for t in range(STATION_TIME, 0, -1):
             if not self.running:
                 return False
+            tick_started_at = time.monotonic()
             self.set_status(f"Status: Station {station_number} - In progress")
             self.update_timer(t)
-            time.sleep(1)
+            self.sleep_remaining_tick(tick_started_at)
+
+        if not self.running:
+            return False
+
+        self.set_status(f"Status: Station {station_number} - STOP")
+        self.update_timer(0)
+        played_stop = self.play_audio(AUDIO_STOP, "stop")
+        if not played_stop and self.running:
+            self.speak("Stop")
         return self.running
 
     def run_break(self):
@@ -270,11 +307,6 @@ class ExamTimerApp:
 
             if not self.running:
                 break
-
-            self.set_status(f"Status: Station {station_count} - STOP")
-            played_stop = self.play_audio(AUDIO_STOP, "stop")
-            if not played_stop and self.running:
-                self.speak("Stop")
 
             if not self.run_break():
                 break

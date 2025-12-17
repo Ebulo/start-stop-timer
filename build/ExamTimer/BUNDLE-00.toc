@@ -1,0 +1,3 @@
+([('ExamTimer',
+   '/Users/sudhasanjeevani/development/projects/system/aiims-auto-timer/dist/ExamTimer',
+   'EXECUTABLE')],)
