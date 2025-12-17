@@ -11,17 +11,12 @@ from tkinter import ttk
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
 
-IS_FROZEN = getattr(sys, "frozen", False)
-MEIPASS = getattr(sys, "_MEIPASS", None)
+if IS_WINDOWS:
+    import winsound
 
-if IS_FROZEN and MEIPASS:
-    BASE_DIR = Path(MEIPASS)
-else:
-    BASE_DIR = Path(__file__).resolve().parent
-
-AUDIO_DIRNAME = "audios"
-AUDIO_BACKUP_SUBDIR = "english-bckup"
-AUDIO_DIR = BASE_DIR / AUDIO_DIRNAME
+BASE_DIR = Path(__file__).resolve().parent
+AUDIO_DIR = BASE_DIR / "audios"
+AUDIO_BACKUP_DIR = AUDIO_DIR / "english-bckup"
 AUDIO_INSTRUCTIONS = "instructions.mp3"
 AUDIO_START = "start.mp3"
 AUDIO_STOP = "stop.mp3"
@@ -29,7 +24,7 @@ AUDIO_MOVE = "move-to-next-station.mp3"
 
 # ---------------- CONFIG ----------------
 STATION_TIME = 4 * 60      # 4 minutes
-BREAK_TIME = 15            # 15 seconds
+BREAK_TIME = 10            # 10 seconds
 START_DELAY = 5            # gap between instructions and Start
 COUNTDOWN_NUMBERS = (3, 2, 1)
 
@@ -121,21 +116,13 @@ class ExamTimerApp:
 
     # ---------- AUDIO ----------
     def resolve_audio_path(self, filename):
-        search_roots = [AUDIO_DIR]
+        primary = AUDIO_DIR / filename
+        if primary.exists():
+            return primary
 
-        if IS_FROZEN:
-            search_roots.append(Path(sys.executable).resolve().parent / AUDIO_DIRNAME)
-
-        search_roots.append(Path.cwd() / AUDIO_DIRNAME)
-
-        for root in search_roots:
-            primary = root / filename
-            if primary.exists():
-                return primary
-
-            backup = root / AUDIO_BACKUP_SUBDIR / filename
-            if backup.exists():
-                return backup
+        backup = AUDIO_BACKUP_DIR / filename
+        if backup.exists():
+            return backup
 
         return None
 
@@ -150,56 +137,42 @@ class ExamTimerApp:
 
         try:
             if IS_WINDOWS:
-                self.play_audio_windows(clip)
+                if clip.suffix.lower() == ".wav":
+                    winsound.PlaySound(str(clip), winsound.SND_FILENAME)
+                else:
+                    command = (
+                        "& { "
+                        "$p = $args[0]; "
+                        "$player = New-Object -ComObject WMPlayer.OCX.7; "
+                        "$player.URL = $p; "
+                        "$player.controls.play(); "
+                        "while ($player.playState -ne 3 -and $player.playState -ne 8 -and $player.playState -ne 1) { "
+                        "Start-Sleep -Milliseconds 50 "
+                        "} "
+                        "while ($player.playState -ne 1 -and $player.playState -ne 8) { "
+                        "Start-Sleep -Milliseconds 100 "
+                        "} "
+                        "$player.close() "
+                        "}"
+                    )
+                    subprocess.run(
+                        ["powershell", "-NoProfile", "-STA", "-Command", command, str(clip)],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
             elif IS_MAC:
                 subprocess.run(["afplay", str(clip)], check=True)
             else:
                 # Prefer a simple, blocking playback so sequencing stays intact.
-                subprocess.run(
-                    ["ffplay", "-nodisp", "-autoexit", str(clip)],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                subprocess.run(["ffplay", "-nodisp", "-autoexit", str(clip)],
+                               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as exc:
             self.set_status(f"Status: {label} audio error")
             print(f"Failed to play {label} audio: {exc}", file=sys.stderr)
             return False
 
         return self.running
-
-    def play_audio_windows(self, clip):
-        import ctypes
-        from ctypes import wintypes
-
-        alias = "exam_audio"
-
-        winmm = ctypes.WinDLL("winmm")
-        mci_send_string = winmm.mciSendStringW
-        mci_send_string.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.UINT, wintypes.HANDLE]
-        mci_send_string.restype = wintypes.UINT
-
-        mci_get_error_string = winmm.mciGetErrorStringW
-        mci_get_error_string.argtypes = [wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
-        mci_get_error_string.restype = wintypes.BOOL
-
-        def mci(command):
-            error = mci_send_string(command, None, 0, 0)
-            if error != 0:
-                buf = ctypes.create_unicode_buffer(512)
-                mci_get_error_string(error, buf, 512)
-                raise RuntimeError(buf.value.strip() or f"MCI error code {error}")
-
-        path_str = str(clip)
-        try:
-            mci(f"close {alias}")
-        except Exception:
-            pass
-
-        audio_type = "waveaudio" if clip.suffix.lower() == ".wav" else "mpegvideo"
-        mci(f'open "{path_str}" type {audio_type} alias {alias}')
-        mci(f"play {alias} wait")
-        mci(f"close {alias}")
 
     def sleep_remaining_tick(self, tick_started_at, tick_seconds=1.0):
         remaining = tick_seconds - (time.monotonic() - tick_started_at)

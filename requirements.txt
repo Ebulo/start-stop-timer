@@ -1,3 +1,5 @@
 pyttsx3>=2.90
+comtypes; platform_system == "Windows"
+pyinstaller; platform_system == "Windows"
 pyobjc; platform_system == "Darwin"
 pywin32; platform_system == "Windows"
